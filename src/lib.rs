@@ -68,9 +68,9 @@ pub fn data_file_path() -> io::Result<PathBuf> {
 }
 
 pub fn run_wrapped(argv: &[OsString]) -> io::Result<CommandOutcome> {
-    let program = argv.first().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "no command was provided")
-    })?;
+    let program = argv
+        .first()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no command was provided"))?;
 
     let started = Instant::now();
     let status = Command::new(program).args(&argv[1..]).status()?;
@@ -199,7 +199,10 @@ fn load_history(path: &Path) -> io::Result<HistoryFile> {
 
 fn save_history(path: &Path, history: &HistoryFile) -> io::Result<()> {
     let parent = path.parent().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "history path has no parent directory")
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "history path has no parent directory",
+        )
     })?;
     fs::create_dir_all(parent)?;
 
@@ -334,7 +337,12 @@ fn stable_key(arguments: &[String]) -> String {
 
     let mut hash = OFFSET_BASIS;
     for argument in arguments {
-        for byte in argument.as_bytes().iter().copied().chain(std::iter::once(0xff)) {
+        for byte in argument
+            .as_bytes()
+            .iter()
+            .copied()
+            .chain(std::iter::once(0xff))
+        {
             hash ^= u64::from(byte);
             hash = hash.wrapping_mul(PRIME);
         }
