@@ -1,12 +1,16 @@
 # BuildTimer
 
+**Measure command durations and compare them with previous local runs.**
+
 BuildTimer is a small, Linux-first Rust CLI for measuring how long build, test, and other terminal commands take and comparing the result with the previous local run of the same command.
 
 It is local-only: no telemetry, cloud service, account, server, or network backend is involved.
 
 ## Status
 
-`v0.1.0` is the initial development version. No release is published yet; real-machine testing comes first.
+**BuildTimer v0.1.0 is available as the first public release.**
+
+A prebuilt Linux x86_64 binary and SHA-256 checksum are available on the [GitHub Releases page](https://github.com/BLCCoreStudio/BuildTimer/releases/tag/v0.1.0).
 
 ## What it does
 
@@ -24,6 +28,23 @@ Previous: 13.102 s -> 12.438 s (664 ms faster, 5.1%)
 ```
 
 The wrapped process exit code is returned by BuildTimer unchanged. If the process is terminated by a Unix signal, BuildTimer uses the conventional `128 + signal` process exit status.
+
+## Install on Linux x86_64
+
+Download these files from the [v0.1.0 release](https://github.com/BLCCoreStudio/BuildTimer/releases/tag/v0.1.0):
+
+- `buildtimer-linux-x86_64`
+- `buildtimer-linux-x86_64.sha256`
+
+Verify and run:
+
+```bash
+sha256sum -c buildtimer-linux-x86_64.sha256
+chmod +x buildtimer-linux-x86_64
+./buildtimer-linux-x86_64 --version
+```
+
+You can optionally rename the binary to `buildtimer` and place it somewhere on your `PATH`, such as `~/.local/bin`.
 
 ## Commands
 
@@ -100,19 +121,14 @@ Requirements:
 ```bash
 git clone https://github.com/BLCCoreStudio/BuildTimer.git
 cd BuildTimer
-cargo build --release
-```
-
-The binary will be available at:
-
-```text
-target/release/buildtimer
+cargo build --release --locked
+./target/release/buildtimer --version
 ```
 
 For local installation during development:
 
 ```bash
-cargo install --path .
+cargo install --path . --locked
 ```
 
 ## Development checks
@@ -121,8 +137,8 @@ The CI workflow runs the same required checks on pull requests and on `main`:
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-features
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo test --locked --all-features
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) before sending changes and [SECURITY.md](SECURITY.md) for vulnerability reporting guidance.
@@ -130,3 +146,5 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) before sending changes and [SECURITY.md](
 ## License
 
 BuildTimer is licensed under the [MIT License](LICENSE).
+
+Built by **BLC Core Studio**.
