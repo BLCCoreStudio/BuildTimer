@@ -1,0 +1,41 @@
+name: Release Notes
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Publish GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release already exists: $GITHUB_REF_NAME"
+            exit 0
+          fi
+
+          extra=()
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            extra+=(--prerelease)
+          fi
+
+          gh release create "$GITHUB_REF_NAME" ' \
+
+--repo
+
+'
+            --title "$GITHUB_REF_NAME" ' \
+
+--generate-notes
+'
+            "${extra[@]}"
