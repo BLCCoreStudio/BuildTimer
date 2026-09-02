@@ -347,7 +347,7 @@ fn sanitize_argv(argv: &[OsString]) -> Vec<String> {
             }
         }
 
-        if is_sensitive_name(&value) {
+        if value.starts_with('-') && is_sensitive_name(&value) {
             sanitized.push(value);
             redact_next = true;
             continue;
