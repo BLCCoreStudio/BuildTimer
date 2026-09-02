@@ -17,16 +17,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: fix/history-concurrency-privacy
-      - name: Restrict sensitive next-argument handling to option names
+      - name: Route URLs through the query redactor
         shell: python
         run: |
           from pathlib import Path
           path = Path('src/lib.rs')
           text = path.read_text()
-          old = '        if is_sensitive_name(&value) {'
-          new = "        if value.starts_with('-') && is_sensitive_name(&value) {"
+          old = '        || contains_sensitive_embedded_assignment(&lowercase)'
+          new = '        || (!lowercase.contains("://") && contains_sensitive_embedded_assignment(&lowercase))'
           if old not in text:
-              raise SystemExit('expected sanitizer condition not found')
+              raise SystemExit('expected embedded-secret condition not found')
           path.write_text(text.replace(old, new, 1))
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
         with:
@@ -47,5 +47,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src/lib.rs
           git add -f ci-sanitizer-test.txt
-          git commit -m "fix: distinguish secret option names from values"
+          git commit -m "fix: route URL secrets through query redaction"
           git push origin HEAD:fix/history-concurrency-privacy
