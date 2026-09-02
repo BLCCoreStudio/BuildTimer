@@ -402,7 +402,7 @@ fn looks_like_sensitive_inline_value(value: &str) -> bool {
     lowercase.contains("authorization:")
         || lowercase.starts_with("bearer ")
         || lowercase.starts_with("basic ")
-        || contains_sensitive_embedded_assignment(&lowercase)
+        || (!lowercase.contains("://") && contains_sensitive_embedded_assignment(&lowercase))
 }
 
 fn contains_sensitive_embedded_assignment(lowercase: &str) -> bool {
