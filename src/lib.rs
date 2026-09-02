@@ -1,14 +1,18 @@
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::ffi::OsString;
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
+use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const HISTORY_VERSION: u32 = 1;
 const HISTORY_LIMIT: usize = 500;
+const LOCK_WAIT_TIMEOUT: Duration = Duration::from_secs(3);
+const LOCK_STALE_AFTER: Duration = Duration::from_secs(30);
+const LOCK_RETRY_DELAY: Duration = Duration::from_millis(10);
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct HistoryEntry {
@@ -44,6 +48,16 @@ pub enum Trend {
     Faster { delta_ms: u64, percent: Option<f64> },
     Slower { delta_ms: u64, percent: Option<f64> },
     Same,
+}
+
+struct HistoryLock {
+    path: PathBuf,
+}
+
+impl Drop for HistoryLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
 }
 
 pub fn data_file_path() -> io::Result<PathBuf> {
@@ -94,6 +108,7 @@ pub fn record_run(
     argv: &[OsString],
     duration: Duration,
 ) -> io::Result<Option<HistoryEntry>> {
+    let _lock = acquire_history_lock(path)?;
     let sanitized = sanitize_argv(argv);
     let command_key = stable_key(&sanitized);
     let command = sanitized
@@ -127,10 +142,12 @@ pub fn record_run(
 }
 
 pub fn history_entries(path: &Path) -> io::Result<Vec<HistoryEntry>> {
+    let _lock = acquire_history_lock(path)?;
     Ok(load_history(path)?.entries)
 }
 
 pub fn clear_history(path: &Path) -> io::Result<bool> {
+    let _lock = acquire_history_lock(path)?;
     match fs::remove_file(path) {
         Ok(()) => Ok(true),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
@@ -174,6 +191,74 @@ pub fn format_duration_ms(duration_ms: u64) -> String {
     }
 }
 
+fn acquire_history_lock(path: &Path) -> io::Result<HistoryLock> {
+    let parent = path.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "history path has no parent directory",
+        )
+    })?;
+    fs::create_dir_all(parent)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
+    }
+
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("history.json");
+    let lock_path = parent.join(format!(".{file_name}.lock"));
+    let started = Instant::now();
+
+    loop {
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+        {
+            Ok(file) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    file.set_permissions(fs::Permissions::from_mode(0o600))?;
+                }
+                return Ok(HistoryLock { path: lock_path });
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                if lock_is_stale(&lock_path) {
+                    match fs::remove_file(&lock_path) {
+                        Ok(()) => continue,
+                        Err(remove_error) if remove_error.kind() == io::ErrorKind::NotFound => {
+                            continue;
+                        }
+                        Err(_) => {}
+                    }
+                }
+
+                if started.elapsed() >= LOCK_WAIT_TIMEOUT {
+                    return Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        "timed out waiting for the BuildTimer history lock",
+                    ));
+                }
+                thread::sleep(LOCK_RETRY_DELAY);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn lock_is_stale(path: &Path) -> bool {
+    fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+        .is_some_and(|age| age >= LOCK_STALE_AFTER)
+}
+
 fn load_history(path: &Path) -> io::Result<HistoryFile> {
     let contents = match fs::read(path) {
         Ok(contents) => contents,
@@ -215,7 +300,11 @@ fn save_history(path: &Path, history: &HistoryFile) -> io::Result<()> {
     let mut serialized = serde_json::to_vec_pretty(history).map_err(io::Error::other)?;
     serialized.push(b'\n');
 
-    let temporary = parent.join(format!(".history.json.tmp-{}", std::process::id()));
+    let temporary = parent.join(format!(
+        ".history.json.tmp-{}-{}",
+        std::process::id(),
+        unix_timestamp_nanos()
+    ));
     fs::write(&temporary, serialized)?;
 
     #[cfg(unix)]
@@ -224,7 +313,13 @@ fn save_history(path: &Path, history: &HistoryFile) -> io::Result<()> {
         fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))?;
     }
 
-    fs::rename(temporary, path)
+    match fs::rename(&temporary, path) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = fs::remove_file(&temporary);
+            Err(error)
+        }
+    }
 }
 
 fn sanitize_argv(argv: &[OsString]) -> Vec<String> {
@@ -263,7 +358,7 @@ fn sanitize_argv(argv: &[OsString]) -> Vec<String> {
             continue;
         }
 
-        sanitized.push(redact_url_credentials(&value));
+        sanitized.push(redact_url_secrets(&value));
     }
 
     sanitized
@@ -307,6 +402,76 @@ fn looks_like_sensitive_inline_value(value: &str) -> bool {
     lowercase.contains("authorization:")
         || lowercase.starts_with("bearer ")
         || lowercase.starts_with("basic ")
+        || contains_sensitive_embedded_assignment(&lowercase)
+}
+
+fn contains_sensitive_embedded_assignment(lowercase: &str) -> bool {
+    let compact: String = lowercase
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
+
+    [
+        "token",
+        "secret",
+        "password",
+        "passwd",
+        "api_key",
+        "api-key",
+        "access_key",
+        "access-key",
+        "authorization",
+        "private_key",
+        "private-key",
+    ]
+    .iter()
+    .any(|marker| {
+        compact.contains(&format!("\"{marker}\":"))
+            || compact.contains(&format!("'{marker}':"))
+            || compact.contains(&format!("{marker}="))
+    })
+}
+
+fn redact_url_secrets(value: &str) -> String {
+    let credentials_redacted = redact_url_credentials(value);
+    let Some(scheme_end) = credentials_redacted.find("://") else {
+        return credentials_redacted;
+    };
+    let Some(relative_query) = credentials_redacted[scheme_end + 3..].find('?') else {
+        return credentials_redacted;
+    };
+    let query_index = scheme_end + 3 + relative_query;
+    let base = &credentials_redacted[..query_index + 1];
+    let remainder = &credentials_redacted[query_index + 1..];
+    let (query, fragment) = remainder
+        .split_once('#')
+        .map_or((remainder, None), |(query, fragment)| (query, Some(fragment)));
+
+    let mut changed = false;
+    let query = query
+        .split('&')
+        .map(|pair| {
+            let Some((key, _value)) = pair.split_once('=') else {
+                return pair.to_owned();
+            };
+            if is_sensitive_name(key) {
+                changed = true;
+                format!("{key}=<redacted>")
+            } else {
+                pair.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("&");
+
+    if !changed {
+        return credentials_redacted;
+    }
+
+    match fragment {
+        Some(fragment) => format!("{base}{query}#{fragment}"),
+        None => format!("{base}{query}"),
+    }
 }
 
 fn redact_url_credentials(value: &str) -> String {
@@ -357,6 +522,13 @@ fn unix_timestamp() -> u64 {
         .as_secs()
 }
 
+fn unix_timestamp_nanos() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+}
+
 fn exit_code_from_status(status: ExitStatus) -> i32 {
     if let Some(code) = status.code() {
         return code;
@@ -393,6 +565,12 @@ mod tests {
         ))
     }
 
+    fn cleanup_history_path(path: &Path) {
+        if let Some(directory) = path.parent().and_then(Path::parent) {
+            let _ = fs::remove_dir_all(directory);
+        }
+    }
+
     #[test]
     fn sanitizes_environment_assignments_and_common_secrets() {
         let sanitized = sanitize_argv(&args(&[
@@ -417,6 +595,26 @@ mod tests {
                 "--password",
                 "<redacted>",
                 "https://<redacted>@example.com/repo",
+            ]
+        );
+    }
+
+    #[test]
+    fn sanitizes_url_query_secrets_and_embedded_structured_secrets() {
+        let sanitized = sanitize_argv(&args(&[
+            "curl",
+            "https://example.com/api?mode=fast&token=top-secret#result",
+            "--data",
+            r#"{"password":"correct-horse-battery-staple","mode":"fast"}"#,
+        ]));
+
+        assert_eq!(
+            sanitized,
+            vec![
+                "curl",
+                "https://example.com/api?mode=fast&token=<redacted>#result",
+                "--data",
+                "<redacted>",
             ]
         );
     }
@@ -466,9 +664,38 @@ mod tests {
         assert!(!clear_history(&path).unwrap());
         assert!(history_entries(&path).unwrap().is_empty());
 
-        if let Some(directory) = path.parent().and_then(Path::parent) {
-            let _ = fs::remove_dir_all(directory);
+        cleanup_history_path(&path);
+    }
+
+    #[test]
+    fn concurrent_history_updates_are_serialized() {
+        let path = temporary_history_path("concurrent");
+        let mut handles = Vec::new();
+
+        for index in 0..12_u64 {
+            let path = path.clone();
+            handles.push(thread::spawn(move || {
+                let command = vec![
+                    OsString::from("cargo"),
+                    OsString::from(format!("test-{index}")),
+                ];
+                record_run(&path, &command, Duration::from_millis(index + 1)).unwrap();
+            }));
         }
+
+        for handle in handles {
+            handle.join().expect("history writer thread should finish");
+        }
+
+        let entries = history_entries(&path).unwrap();
+        assert_eq!(entries.len(), 12);
+        let unique = entries
+            .iter()
+            .map(|entry| entry.command_key.as_str())
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(unique.len(), 12);
+
+        cleanup_history_path(&path);
     }
 
     #[test]
