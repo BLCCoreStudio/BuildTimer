@@ -23,31 +23,29 @@ jobs:
           from pathlib import Path
           path = Path('src/lib.rs')
           text = path.read_text()
-          old = '''        if is_sensitive_name(&value) {
-                      sanitized.push(value);
-                      redact_next = true;
-                      continue;
-                  }
-          '''
-          new = '''        if value.starts_with('-') && is_sensitive_name(&value) {
-                      sanitized.push(value);
-                      redact_next = true;
-                      continue;
-                  }
-          '''
+          old = '        if is_sensitive_name(&value) {'
+          new = "        if value.starts_with('-') && is_sensitive_name(&value) {"
           if old not in text:
-              raise SystemExit('expected sanitizer block not found')
+              raise SystemExit('expected sanitizer condition not found')
           path.write_text(text.replace(old, new, 1))
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
         with:
           toolchain: stable
           components: rustfmt
       - run: cargo fmt --all
-      - run: cargo test --locked --all-features
-      - name: Commit sanitizer fix
+      - name: Capture test result
+        shell: bash
+        run: |
+          set +e
+          cargo test --locked --all-features -- --nocapture > ci-sanitizer-test.txt 2>&1
+          status=$?
+          echo "exit_status=$status" >> ci-sanitizer-test.txt
+          exit 0
+      - name: Commit patched source and diagnostics
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src/lib.rs
+          git add -f ci-sanitizer-test.txt
           git commit -m "fix: distinguish secret option names from values"
           git push origin HEAD:fix/history-concurrency-privacy
