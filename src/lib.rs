@@ -445,7 +445,9 @@ fn redact_url_secrets(value: &str) -> String {
     let remainder = &credentials_redacted[query_index + 1..];
     let (query, fragment) = remainder
         .split_once('#')
-        .map_or((remainder, None), |(query, fragment)| (query, Some(fragment)));
+        .map_or((remainder, None), |(query, fragment)| {
+            (query, Some(fragment))
+        });
 
     let mut changed = false;
     let query = query
