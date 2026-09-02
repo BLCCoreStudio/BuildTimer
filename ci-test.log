@@ -1,0 +1,53 @@
+[1m[92m    Updating[0m crates.io index
+[1m[92m Downloading[0m crates ...
+[1m[92m  Downloaded[0m itoa v1.0.18
+[1m[92m  Downloaded[0m memchr v2.8.3
+[1m[92m  Downloaded[0m quote v1.0.47
+[1m[92m  Downloaded[0m zmij v1.0.23
+[1m[92m  Downloaded[0m serde v1.0.229
+[1m[92m  Downloaded[0m proc-macro2 v1.0.107
+[1m[92m  Downloaded[0m serde_derive v1.0.229
+[1m[92m  Downloaded[0m unicode-ident v1.0.24
+[1m[92m  Downloaded[0m serde_core v1.0.229
+[1m[92m  Downloaded[0m serde_json v1.0.151
+[1m[92m  Downloaded[0m syn v3.0.4
+[1m[92m   Compiling[0m proc-macro2 v1.0.107
+[1m[92m   Compiling[0m quote v1.0.47
+[1m[92m   Compiling[0m unicode-ident v1.0.24
+[1m[92m   Compiling[0m serde_core v1.0.229
+[1m[92m   Compiling[0m zmij v1.0.23
+[1m[92m   Compiling[0m serde v1.0.229
+[1m[92m   Compiling[0m serde_json v1.0.151
+[1m[92m   Compiling[0m memchr v2.8.3
+[1m[92m   Compiling[0m itoa v1.0.18
+[1m[92m   Compiling[0m syn v3.0.4
+[1m[92m   Compiling[0m serde_derive v1.0.229
+[1m[92m   Compiling[0m buildtimer v0.1.0 (/home/runner/work/BuildTimer/BuildTimer)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 11.68s
+[1m[92m     Running[0m unittests src/lib.rs (target/debug/deps/buildtimer-66b86291a712d7bf)
+
+running 8 tests
+test tests::compares_faster_and_slower_runs ... ok
+test tests::missing_command_returns_invalid_input ... ok
+test tests::sanitizes_environment_assignments_and_common_secrets ... ok
+
+thread 'tests::sanitizes_url_query_secrets_and_embedded_structured_secrets' (2682) panicked at src/lib.rs:613:9:
+assertion `left == right` failed
+  left: ["curl", "https://example.com/api?mode=fast&token=top-secret#result", "<redacted>", "{\"password\":\"correct-horse-battery-staple\",\"mode\":\"fast\"}"]
+ right: ["curl", "https://example.com/api?mode=fast&token=<redacted>#result", "--data", "<redacted>"]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test tests::sanitizes_url_query_secrets_and_embedded_structured_secrets ... FAILED
+test tests::secret_values_do_not_change_the_persisted_command_key ... ok
+test tests::stores_loads_and_clears_history ... ok
+test tests::wrapped_exit_code_is_preserved ... ok
+test tests::concurrent_history_updates_are_serialized ... ok
+
+failures:
+
+failures:
+    tests::sanitizes_url_query_secrets_and_embedded_structured_secrets
+
+test result: FAILED. 7 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+[1m[91merror[0m: test failed, to rerun pass `--lib`
+exit_status=101
