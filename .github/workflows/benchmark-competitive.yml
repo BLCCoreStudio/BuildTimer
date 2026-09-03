@@ -50,9 +50,25 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p benchmark-results
+          cat > /tmp/run-buildtimer-200.sh <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          for _ in $(seq 1 200); do
+            XDG_DATA_HOME=/tmp/buildtimer-bench-data ./target/release/buildtimer -- /bin/true >/dev/null
+          done
+          EOF
+          cat > /tmp/run-gnu-time-200.sh <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          for _ in $(seq 1 200); do
+            /usr/bin/time -f %e /bin/true >/dev/null 2>/dev/null
+          done
+          EOF
+          chmod +x /tmp/run-buildtimer-200.sh /tmp/run-gnu-time-200.sh
+
           {
-            echo "workload=execute /bin/true through a one-shot command timing wrapper"
-            echo "scope=wrapper overhead only; BuildTimer also persists local history"
+            echo "workload=200 sequential /bin/true executions through command timing wrappers"
+            echo "scope=wrapper overhead; BuildTimer also persists local history"
             echo "runner=ubuntu-24.04"
             echo "kernel=$(uname -srmo)"
             echo "cpu=$(lscpu | awk -F: '/Model name/{gsub(/^[ \t]+/,"",$2); print $2; exit}')"
@@ -61,16 +77,16 @@ jobs:
             echo "hyperfine=$(hyperfine --version | head -n1)"
           } > benchmark-results/environment.txt
 
-          hyperfine --warmup 5 --runs 50 \
+          hyperfine --warmup 3 --runs 20 \
             --prepare 'rm -rf /tmp/buildtimer-bench-data && mkdir -p /tmp/buildtimer-bench-data' \
             --export-json benchmark-results/wrapper-overhead.json \
             --export-markdown benchmark-results/wrapper-overhead.md \
-            --command-name 'BuildTimer' 'XDG_DATA_HOME=/tmp/buildtimer-bench-data ./target/release/buildtimer -- /bin/true >/dev/null' \
-            --command-name 'GNU time' '/usr/bin/time -f %e /bin/true >/dev/null 2>/dev/null'
+            --command-name 'BuildTimer x200' '/tmp/run-buildtimer-200.sh' \
+            --command-name 'GNU time x200' '/tmp/run-gnu-time-200.sh'
 
           rm -rf /tmp/buildtimer-resource-data && mkdir -p /tmp/buildtimer-resource-data
-          /usr/bin/time -v env XDG_DATA_HOME=/tmp/buildtimer-resource-data ./target/release/buildtimer -- /bin/true >/dev/null 2>benchmark-results/buildtimer-time-v.txt
-          /usr/bin/time -v /usr/bin/time -f '%e' /bin/true >/dev/null 2>benchmark-results/gnu-time-v.txt
+          XDG_DATA_HOME=/tmp/buildtimer-resource-data /usr/bin/time -v /tmp/run-buildtimer-200.sh >/dev/null 2>benchmark-results/buildtimer-time-v.txt
+          /usr/bin/time -v /tmp/run-gnu-time-200.sh >/dev/null 2>benchmark-results/gnu-time-v.txt
           cat benchmark-results/wrapper-overhead.md
 
       - name: Publish summary
@@ -83,7 +99,7 @@ jobs:
             echo '```' >> "$GITHUB_STEP_SUMMARY"
           fi
           if [[ -f benchmark-results/wrapper-overhead.md ]]; then
-            echo '## One-shot timing wrapper overhead' >> "$GITHUB_STEP_SUMMARY"
+            echo '## Aggregated timing-wrapper overhead' >> "$GITHUB_STEP_SUMMARY"
             cat benchmark-results/wrapper-overhead.md >> "$GITHUB_STEP_SUMMARY"
           fi
 
