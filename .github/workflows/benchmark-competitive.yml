@@ -1,0 +1,113 @@
+name: Competitive benchmark
+
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/benchmark-competitive.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  command-timing:
+    name: BuildTimer vs GNU time
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install benchmark tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes hyperfine time
+
+      - name: Build BuildTimer
+        run: cargo build --release --locked
+
+      - name: Verify shared wrapper behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/buildtimer-data
+          mkdir -p /tmp/buildtimer-data
+          set +e
+          XDG_DATA_HOME=/tmp/buildtimer-data ./target/release/buildtimer -- sh -c 'exit 7' >/tmp/buildtimer-exit.out 2>&1
+          bt_code=$?
+          /usr/bin/time -f '%e' sh -c 'exit 7' >/tmp/time-exit.out 2>&1
+          time_code=$?
+          set -e
+          test "$bt_code" -eq 7
+          test "$time_code" -eq 7
+          printf 'Both wrappers preserved exit code 7.\n'
+
+      - name: Benchmark wrapper overhead
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p benchmark-results
+          cat > /tmp/run-buildtimer-200.sh <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          for _ in $(seq 1 200); do
+            XDG_DATA_HOME=/tmp/buildtimer-bench-data ./target/release/buildtimer -- /bin/true >/dev/null
+          done
+          EOF
+          cat > /tmp/run-gnu-time-200.sh <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          for _ in $(seq 1 200); do
+            /usr/bin/time -f %e /bin/true >/dev/null 2>/dev/null
+          done
+          EOF
+          chmod +x /tmp/run-buildtimer-200.sh /tmp/run-gnu-time-200.sh
+
+          {
+            echo "workload=200 sequential /bin/true executions through command timing wrappers"
+            echo "scope=wrapper overhead; BuildTimer also persists local history"
+            echo "runner=ubuntu-24.04"
+            echo "kernel=$(uname -srmo)"
+            echo "cpu=$(lscpu | awk -F: '/Model name/{gsub(/^[ \t]+/,"",$2); print $2; exit}')"
+            echo "buildtimer=$(./target/release/buildtimer --version)"
+            echo "gnu_time=$(/usr/bin/time --version | head -n1)"
+            echo "hyperfine=$(hyperfine --version | head -n1)"
+          } > benchmark-results/environment.txt
+
+          hyperfine --warmup 3 --runs 20 \
+            --prepare 'rm -rf /tmp/buildtimer-bench-data && mkdir -p /tmp/buildtimer-bench-data' \
+            --export-json benchmark-results/wrapper-overhead.json \
+            --export-markdown benchmark-results/wrapper-overhead.md \
+            --command-name 'BuildTimer x200' '/tmp/run-buildtimer-200.sh' \
+            --command-name 'GNU time x200' '/tmp/run-gnu-time-200.sh'
+
+          rm -rf /tmp/buildtimer-resource-data && mkdir -p /tmp/buildtimer-resource-data
+          XDG_DATA_HOME=/tmp/buildtimer-resource-data /usr/bin/time -v /tmp/run-buildtimer-200.sh >/dev/null 2>benchmark-results/buildtimer-time-v.txt
+          /usr/bin/time -v /tmp/run-gnu-time-200.sh >/dev/null 2>benchmark-results/gnu-time-v.txt
+          cat benchmark-results/wrapper-overhead.md
+
+      - name: Publish summary
+        if: always()
+        run: |
+          if [[ -f benchmark-results/environment.txt ]]; then
+            echo '## Environment' >> "$GITHUB_STEP_SUMMARY"
+            echo '```text' >> "$GITHUB_STEP_SUMMARY"
+            cat benchmark-results/environment.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [[ -f benchmark-results/wrapper-overhead.md ]]; then
+            echo '## Aggregated timing-wrapper overhead' >> "$GITHUB_STEP_SUMMARY"
+            cat benchmark-results/wrapper-overhead.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload raw evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: buildtimer-competitive-benchmark-${{ github.sha }}
+          path: benchmark-results/
+          if-no-files-found: error
+          retention-days: 90
