@@ -341,7 +341,7 @@ fn sanitize_argv(argv: &[OsString]) -> Vec<String> {
                 continue;
             }
 
-            if is_sensitive_name(name) {
+            if !name.contains("://") && is_sensitive_name(name) {
                 sanitized.push(format!("{name}=<redacted>"));
                 continue;
             }
